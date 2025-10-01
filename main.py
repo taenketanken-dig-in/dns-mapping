@@ -43,18 +43,20 @@ def main():
                 "ip4": ip4_records,
                 "include": include_records
             }
-            # Lookup country codes for domain's A records using IP geolocation
-            a_records = pydig.query(domain, 'A')
+            # Lookup country codes for MX host A records (instead of base domain)
+            mx_hosts = [host.rstrip('.') for _, host in mx_tuples]
             domain_countries = []
-            for ip in a_records:
-                country_code = None
-                try:
-                    ipwhois_client = IPWhois(ip, timeout=10)
-                    rdap_data = ipwhois_client.lookup_rdap(asn_methods=["whois", "http"])
-                    country_code = rdap_data.get("asn_country_code")
-                except Exception:
+            for mx_host in mx_hosts:
+                a_records = pydig.query(mx_host, 'A')
+                for ip in a_records:
                     country_code = None
-                domain_countries.append(country_code)
+                    try:
+                        ipwhois_client = IPWhois(ip, timeout=10)
+                        rdap_data = ipwhois_client.lookup_rdap(asn_methods=["whois", "http"])
+                        country_code = rdap_data.get("asn_country_code")
+                    except Exception:
+                        country_code = None
+                    domain_countries.append(country_code)
             
             # Check for autodiscover CNAME record (used by Exchange/Outlook)
             autodiscover_cname = pydig.query(f"autodiscover.{domain}", 'CNAME')
@@ -195,7 +197,16 @@ def main():
             print(left_line.ljust(left_width) + (" " * padding) + right_line)
 
     # Normalize rigsmyndighed for filtering as strings "0"/"1"
-    rigs_col = results_df["rigsmyndighed"].astype(str).str.strip().fillna("")
+    def normalize_rigs(value):
+        if pd.isna(value):
+            return ""
+        s = str(value).strip().lower()
+        if s in {"1", "1.0", "true", "yes"}:
+            return "1"
+        if s in {"0", "0.0", "false", "no"}:
+            return "0"
+        return s if s in {"0", "1"} else ""
+    rigs_col = results_df["rigsmyndighed"].apply(normalize_rigs)
 
     # Display Microsoft detection summary comparing rigsmyndighed groups
     print("\nMicrosoft detection summary (comparison)")
@@ -220,8 +231,33 @@ def main():
     summary_right = build_summary(results_df[rigs_col == "1"]).copy()
     print_two_tables_side_by_side(summary_left, summary_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
     
+    # Signature type distribution (counts and percents) across groups
+    print("\nSignature type distribution (comparison)")
+    print("=" * 80)
+    signature_cols = [
+        "is_microsoft_365",
+        "is_microsoft_autodiscover",
+        "is_microsoft_spf",
+        "is_microsoft_dkim",
+    ]
+    def build_signature_distribution(subset_df):
+        total = len(subset_df)
+        if total == 0:
+            return pd.DataFrame([
+                {"signature": sig, "count": 0, "percent": 0.0} for sig in signature_cols
+            ])[ ["signature", "count", "percent"] ]
+        rows = []
+        for sig in signature_cols:
+            count = int((subset_df[sig] == 1).sum())
+            percent = round((count / total) * 100, 1) if total > 0 else 0.0
+            rows.append({"signature": sig, "count": count, "percent": percent})
+        return pd.DataFrame(rows)[ ["signature", "count", "percent"] ]
+    distro_left = build_signature_distribution(results_df[rigs_col == "0"]).copy()
+    distro_right = build_signature_distribution(results_df[rigs_col == "1"]).copy()
+    print_two_tables_side_by_side(distro_left, distro_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
+    
     # Display country distribution comparison
-    print("\nCountry distribution (top 10) comparison")
+    print("\nCountry distribution comparison")
     print("=" * 80)
     def build_country_table(subset_df):
         """Build country distribution table for domains with geolocation data"""
@@ -234,7 +270,7 @@ def main():
                 for country in [c.strip() for c in str(countries).split(',')]:
                     if country:
                         country_counts[country] = country_counts.get(country, 0) + 1
-        sorted_items = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        sorted_items = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)
         total_with_countries = len(domains_with_countries)
         table = pd.DataFrame([
             {"country": c, "count": n, "percent": round((n / total_with_countries) * 100, 1)}
