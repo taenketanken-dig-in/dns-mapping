@@ -111,15 +111,6 @@ def main():
                 "error": str(e)
             })
 
-    print("\nDNS Lookup Results")
-
-    print("-" * 40)
-    for result in results:
-        domain_str = f"--- | Domain: {result['domain']} |"
-        dash_count = 40 - len(domain_str) - 1
-        print(domain_str, "-" * dash_count)
-        print(result)
-        print("-" * 40)
 
     results_df = pd.DataFrame(results)
 
@@ -182,55 +173,72 @@ def main():
     )
 
     results_df["microsoft_signs"] = results_df[["is_microsoft_365", "is_microsoft_autodiscover", "is_microsoft_spf", "is_microsoft_dkim"]].sum(axis=1)
-    # Print summary results by rigsmyndighed (binary value)
-    for rigsmyndighed_value in [0, 1]:
-        subset = results_df[results_df["rigsmyndighed"].fillna("") == rigsmyndighed_value]
-        print(f"\nMicrosoft Detection Summary for rigsmyndighed = '{rigsmyndighed_value}'")
-        print("-" * 40)
-        print(f"Total domains checked: {len(subset)}")
-        print(f"Domains with Microsoft signs: {subset[subset['microsoft_signs'] > 0].shape[0]}")
-        print(f"Domains with 1 Microsoft sign: {subset[subset['microsoft_signs'] == 1].shape[0]}")
-        print(f"Domains with 2 Microsoft signs: {subset[subset['microsoft_signs'] == 2].shape[0]}")
-        print(f"Domains with 3 Microsoft signs: {subset[subset['microsoft_signs'] == 3].shape[0]}")
-        print(f"Domains with all 4 Microsoft signs: {subset[subset['microsoft_signs'] == 4].shape[0]}")
-        print("-" * 40)
+    # ---- CLI TABLE OUTPUTS (side-by-side comparisons) ----
+    def print_two_tables_side_by_side(left_df, right_df, left_title, right_title, padding=4):
+        left_str = left_df.to_string(index=False)
+        right_str = right_df.to_string(index=False)
+        left_lines = left_str.splitlines() if left_str else []
+        right_lines = right_str.splitlines() if right_str else []
+        left_width = max((len(line) for line in left_lines), default=0)
+        right_width = max((len(line) for line in right_lines), default=0)
+        title_line = left_title.ljust(left_width) + (" " * padding) + right_title
+        print(title_line)
+        print(("-" * left_width) + (" " * padding) + ("-" * right_width))
+        max_lines = max(len(left_lines), len(right_lines))
+        for i in range(max_lines):
+            left_line = left_lines[i] if i < len(left_lines) else ""
+            right_line = right_lines[i] if i < len(right_lines) else ""
+            print(left_line.ljust(left_width) + (" " * padding) + right_line)
+
+    # Normalize rigsmyndighed for filtering as strings "0"/"1"
+    rigs_col = results_df["rigsmyndighed"].astype(str).str.strip().fillna("")
+
+    # Microsoft detection summary as two sub-tables side-by-side
+    print("\nMicrosoft detection summary (comparison)")
+    print("=" * 80)
+    def build_summary(subset_df):
+        total = len(subset_df)
+        signs_gt_0 = subset_df[subset_df["microsoft_signs"] > 0].shape[0]
+        signs_1 = subset_df[subset_df["microsoft_signs"] == 1].shape[0]
+        signs_2 = subset_df[subset_df["microsoft_signs"] == 2].shape[0]
+        signs_3 = subset_df[subset_df["microsoft_signs"] == 3].shape[0]
+        signs_4 = subset_df[subset_df["microsoft_signs"] == 4].shape[0]
+        return pd.DataFrame([
+            {"metric": "total_domains", "value": total},
+            {"metric": ">0_signs", "value": signs_gt_0},
+            {"metric": "exactly_1", "value": signs_1},
+            {"metric": "exactly_2", "value": signs_2},
+            {"metric": "exactly_3", "value": signs_3},
+            {"metric": "exactly_4", "value": signs_4},
+        ])[ ["metric", "value"] ]
+    summary_left = build_summary(results_df[rigs_col == "0"]).copy()
+    summary_right = build_summary(results_df[rigs_col == "1"]).copy()
+    print_two_tables_side_by_side(summary_left, summary_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
     
-    # Print country distribution by rigsmyndighed
-    for rigsmyndighed_value in [0, 1]:
-        subset = results_df[results_df["rigsmyndighed"].fillna("") == rigsmyndighed_value]
-        print(f"\nCountry Distribution for rigsmyndighed = '{rigsmyndighed_value}'")
-        print("-" * 40)
-        print(f"Total domains checked: {len(subset)}")
-        
-        # Count domains with country data
-        domains_with_countries = subset[subset['domain_countries'].notna() & (subset['domain_countries'] != '')]
-        print(f"Domains with country data: {len(domains_with_countries)}")
-        
-        if len(domains_with_countries) > 0:
-            # Count country occurrences
-            country_counts = {}
-            for countries in domains_with_countries['domain_countries']:
-                if countries:
-                    # Handle comma-separated countries
-                    country_list = [c.strip() for c in str(countries).split(',')]
-                    for country in country_list:
-                        if country:
-                            country_counts[country] = country_counts.get(country, 0) + 1
-            
-            # Sort by count descending
-            sorted_countries = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)
-            
-            print(f"Unique countries found: {len(sorted_countries)}")
-            print("\nTop countries:")
-            for country, count in sorted_countries[:10]:  # Show top 10
-                percentage = (count / len(domains_with_countries)) * 100
-                print(f"  {country}: {count} domains ({percentage:.1f}%)")
-            
-            if len(sorted_countries) > 10:
-                print(f"  ... and {len(sorted_countries) - 10} more countries")
-        else:
-            print("No country data available")
-        print("-" * 40)
+    # 3) Country distribution by rigsmyndighed as side-by-side tables
+    print("\nCountry distribution (top 10) comparison")
+    print("=" * 80)
+    def build_country_table(subset_df):
+        domains_with_countries = subset_df[subset_df["domain_countries"].notna() & (subset_df["domain_countries"] != "")]
+        if len(domains_with_countries) == 0:
+            return pd.DataFrame([{"country": "-", "count": 0, "percent": 0.0}])[ ["country", "count", "percent"] ]
+        country_counts = {}
+        for countries in domains_with_countries["domain_countries"]:
+            if countries:
+                for country in [c.strip() for c in str(countries).split(',')]:
+                    if country:
+                        country_counts[country] = country_counts.get(country, 0) + 1
+        sorted_items = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        total_with_countries = len(domains_with_countries)
+        table = pd.DataFrame([
+            {"country": c, "count": n, "percent": round((n / total_with_countries) * 100, 1)}
+            for c, n in sorted_items
+        ])[ ["country", "count", "percent"] ]
+        return table
+
+    country_left = build_country_table(results_df[rigs_col == "0"]).copy()
+    country_right = build_country_table(results_df[rigs_col == "1"]).copy()
+    print_two_tables_side_by_side(country_left, country_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
     
     results_df.to_csv("analysis_results.csv", index=False)
 
