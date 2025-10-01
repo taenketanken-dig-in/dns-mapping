@@ -1,6 +1,7 @@
 import pydig
 import pandas as pd
 import re
+from ipwhois import IPWhois
 
 def main():
     domains_df = pd.read_csv("domains.csv")
@@ -39,6 +40,18 @@ def main():
                 "ip4": ip4_records,
                 "include": include_records
             }
+            # Lookup country codes for base domain A records
+            a_records = pydig.query(domain, 'A')
+            domain_countries = []
+            for ip in a_records:
+                country_code = None
+                try:
+                    ipwhois_client = IPWhois(ip, timeout=10)
+                    rdap_data = ipwhois_client.lookup_rdap(asn_methods=["whois", "http"])
+                    country_code = rdap_data.get("asn_country_code")
+                except Exception:
+                    country_code = None
+                domain_countries.append(country_code)
             autodiscover_cname = pydig.query(f"autodiscover.{domain}", 'CNAME')
             autodiscover_records = autodiscover_cname[0].rstrip('.') if autodiscover_cname else ""
 
@@ -81,6 +94,7 @@ def main():
                 "MX": mx_records,
                 "autodiscover": autodiscover_records,
                 "SPF": spf_records,
+                "domain_countries": domain_countries,
                 "DKIM": dkim_selectors
             })
 
@@ -108,6 +122,19 @@ def main():
         print("-" * 40)
 
     results_df = pd.DataFrame(results)
+
+    # Normalize domain_countries: convert ['DE'] -> 'DE', multiple -> 'DE,US', empty -> None
+    if "domain_countries" in results_df.columns:
+        def normalize_countries(val):
+            if isinstance(val, list):
+                vals = [v for v in val if v]
+                if len(vals) == 1:
+                    return vals[0]
+                if len(vals) > 1:
+                    return ",".join(sorted(set(vals)))
+                return None
+            return val
+        results_df["domain_countries"] = results_df["domain_countries"].map(normalize_countries)
 
     # unfold spf ip4 and include into a column per entry. (ip4_1, ip4_2, ..., include_1, include_2, ...)
     spf_expanded = results_df["SPF"].apply(pd.Series)
@@ -146,9 +173,12 @@ def main():
     results_df["is_microsoft_spf"] = results_df[[col for col in results_df.columns if col.startswith("spf_include_")]].apply(
         lambda row: 1 if any("spf.protection.outlook.com" in str(val) for val in row if pd.notna(val)) else 0, axis=1
     )
-    # if dkim includes onmicrosoft.com -> 1 else 0
+    # if dkim includes onmicrosoft.com or dkim.protection.outlook.com -> 1 else 0
     results_df["is_microsoft_dkim"] = results_df[[col for col in results_df.columns if col.startswith("dkim_")]].apply(
-        lambda row: 1 if any("onmicrosoft.com" in str(val) for val in row if pd.notna(val)) else 0, axis=1
+        lambda row: 1 if any(
+            ("onmicrosoft.com" in str(val) or "dkim.protection.outlook.com" in str(val))
+            for val in row if pd.notna(val)
+        ) else 0, axis=1
     )
 
     results_df["microsoft_signs"] = results_df[["is_microsoft_365", "is_microsoft_autodiscover", "is_microsoft_spf", "is_microsoft_dkim"]].sum(axis=1)
@@ -164,8 +194,47 @@ def main():
         print(f"Domains with 3 Microsoft signs: {subset[subset['microsoft_signs'] == 3].shape[0]}")
         print(f"Domains with all 4 Microsoft signs: {subset[subset['microsoft_signs'] == 4].shape[0]}")
         print("-" * 40)
+    
+    # Print country distribution by rigsmyndighed
+    for rigsmyndighed_value in [0, 1]:
+        subset = results_df[results_df["rigsmyndighed"].fillna("") == rigsmyndighed_value]
+        print(f"\nCountry Distribution for rigsmyndighed = '{rigsmyndighed_value}'")
+        print("-" * 40)
+        print(f"Total domains checked: {len(subset)}")
+        
+        # Count domains with country data
+        domains_with_countries = subset[subset['domain_countries'].notna() & (subset['domain_countries'] != '')]
+        print(f"Domains with country data: {len(domains_with_countries)}")
+        
+        if len(domains_with_countries) > 0:
+            # Count country occurrences
+            country_counts = {}
+            for countries in domains_with_countries['domain_countries']:
+                if countries:
+                    # Handle comma-separated countries
+                    country_list = [c.strip() for c in str(countries).split(',')]
+                    for country in country_list:
+                        if country:
+                            country_counts[country] = country_counts.get(country, 0) + 1
+            
+            # Sort by count descending
+            sorted_countries = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)
+            
+            print(f"Unique countries found: {len(sorted_countries)}")
+            print("\nTop countries:")
+            for country, count in sorted_countries[:10]:  # Show top 10
+                percentage = (count / len(domains_with_countries)) * 100
+                print(f"  {country}: {count} domains ({percentage:.1f}%)")
+            
+            if len(sorted_countries) > 10:
+                print(f"  ... and {len(sorted_countries) - 10} more countries")
+        else:
+            print("No country data available")
+        print("-" * 40)
+    
     results_df.to_csv("analysis_results.csv", index=False)
 
 
 if __name__ == "__main__":
     main()
+
