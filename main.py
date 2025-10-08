@@ -207,10 +207,18 @@ def main():
             return "0"
         return s if s in {"0", "1"} else ""
     rigs_col = results_df["rigsmyndighed"].apply(normalize_rigs)
-
-    # Display Microsoft detection summary comparing rigsmyndighed groups
-    print("\nMicrosoft detection summary (comparison)")
-    print("=" * 80)
+    
+    # Check if there are any rigsmyndighed values other than 0
+    has_rigsmyndighed = (rigs_col == "1").any()
+    
+    if has_rigsmyndighed:
+        # Display Microsoft detection summary comparing rigsmyndighed groups
+        print("\nMicrosoft detection summary (comparison)")
+        print("=" * 80)
+    else:
+        # Display Microsoft detection summary (overall)
+        print("\nMicrosoft detection summary (overall)")
+        print("=" * 80)
     def build_summary(subset_df):
         """Build summary statistics for Microsoft detection indicators"""
         total = len(subset_df)
@@ -227,13 +235,23 @@ def main():
             {"metric": "exactly_3", "value": signs_3},
             {"metric": "exactly_4", "value": signs_4},
         ])[ ["metric", "value"] ]
-    summary_left = build_summary(results_df[rigs_col == "0"]).copy()
-    summary_right = build_summary(results_df[rigs_col == "1"]).copy()
-    print_two_tables_side_by_side(summary_left, summary_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
+    
+    if has_rigsmyndighed:
+        summary_left = build_summary(results_df[rigs_col == "0"]).copy()
+        summary_right = build_summary(results_df[rigs_col == "1"]).copy()
+        print_two_tables_side_by_side(summary_left, summary_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
+    else:
+        summary_overall = build_summary(results_df).copy()
+        print(summary_overall.to_string(index=False))
     
     # Signature type distribution (counts and percents) across groups
-    print("\nSignature type distribution (comparison)")
-    print("=" * 80)
+    if has_rigsmyndighed:
+        print("\nSignature type distribution (comparison)")
+        print("=" * 80)
+    else:
+        print("\nSignature type distribution (overall)")
+        print("=" * 80)
+    
     signature_cols = [
         "is_microsoft_365",
         "is_microsoft_autodiscover",
@@ -252,13 +270,23 @@ def main():
             percent = round((count / total) * 100, 1) if total > 0 else 0.0
             rows.append({"signature": sig, "count": count, "percent": percent})
         return pd.DataFrame(rows)[ ["signature", "count", "percent"] ]
-    distro_left = build_signature_distribution(results_df[rigs_col == "0"]).copy()
-    distro_right = build_signature_distribution(results_df[rigs_col == "1"]).copy()
-    print_two_tables_side_by_side(distro_left, distro_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
+    
+    if has_rigsmyndighed:
+        distro_left = build_signature_distribution(results_df[rigs_col == "0"]).copy()
+        distro_right = build_signature_distribution(results_df[rigs_col == "1"]).copy()
+        print_two_tables_side_by_side(distro_left, distro_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
+    else:
+        distro_overall = build_signature_distribution(results_df).copy()
+        print(distro_overall.to_string(index=False))
     
     # Display country distribution comparison
-    print("\nCountry distribution comparison")
-    print("=" * 80)
+    if has_rigsmyndighed:
+        print("\nCountry distribution comparison")
+        print("=" * 80)
+    else:
+        print("\nCountry distribution (overall)")
+        print("=" * 80)
+    
     def build_country_table(subset_df):
         """Build country distribution table for domains with geolocation data"""
         domains_with_countries = subset_df[subset_df["domain_countries"].notna() & (subset_df["domain_countries"] != "")]
@@ -278,9 +306,13 @@ def main():
         ])[ ["country", "count", "percent"] ]
         return table
 
-    country_left = build_country_table(results_df[rigs_col == "0"]).copy()
-    country_right = build_country_table(results_df[rigs_col == "1"]).copy()
-    print_two_tables_side_by_side(country_left, country_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
+    if has_rigsmyndighed:
+        country_left = build_country_table(results_df[rigs_col == "0"]).copy()
+        country_right = build_country_table(results_df[rigs_col == "1"]).copy()
+        print_two_tables_side_by_side(country_left, country_right, "rigsmyndighed = 0", "rigsmyndighed = 1")
+    else:
+        country_overall = build_country_table(results_df).copy()
+        print(country_overall.to_string(index=False))
     
     # Save final analysis results
     results_df.to_csv("analysis_results.csv", index=False)
