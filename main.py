@@ -9,8 +9,9 @@ def main():
     rigsmyndighed_map = domains_df.set_index("domain")["rigsmyndighed"].to_dict()
     domains_to_check = domains_df["domain"].tolist()
     results = []
+    total_domains = len(domains_to_check)
 
-    for domain in domains_to_check:
+    for i, domain in enumerate(domains_to_check, 1):
         try:
             rigsmyndighed = rigsmyndighed_map.get(domain, None)
             
@@ -105,7 +106,7 @@ def main():
                 "DKIM": dkim_selectors
             })
 
-            print(f"Processed domain: {domain}")
+            print(f"Processed domain {i} of {total_domains}: {domain}                ", end="\r")
         except Exception as e:
             rigsmyndighed = rigsmyndighed_map.get(domain, None)
             results.append({
